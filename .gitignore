@@ -27,3 +27,7 @@
 *.exe
 *.out
 *.app
+*.suo
+*.db
+*.opendb
+/DX11_EscNY_3DObject_Parser/x64/Debug
