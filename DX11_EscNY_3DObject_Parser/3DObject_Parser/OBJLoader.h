@@ -10,6 +10,7 @@ struct FaceType
 	int nIndex1, nIndex2, nIndex3;
 };
 
+
 class OBJLoader
 {
 public:
