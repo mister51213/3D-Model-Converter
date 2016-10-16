@@ -318,10 +318,28 @@ bool OBJLoader::WriteToBinaryFile(
 	// i is for index of faces, j is for index of vertexFormats list
 	for( int i = 0, j = 0; i < m_faceCount; i++, j += 3 )
 	{
-		// Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
-		int vIndex = Faces[ i ].vIndex1 > 0 ? Faces[ i ].vIndex1 - 1 : -( Faces[ i ].vIndex1 + 1 );
-		int tIndex = Faces[ i ].tIndex1 > 0 ? Faces[ i ].tIndex1 - 1 : -( Faces[ i ].tIndex1 + 1 );
-		int nIndex = Faces[ i ].nIndex1 > 0 ? Faces[ i ].nIndex1 - 1 : -( Faces[ i ].nIndex1 + 1 );
+        int vIndex = 0;
+        int tIndex = 0;
+        int nIndex = 0;
+
+        if (Faces[i].vIndex1 != 0 && Faces[i].tIndex1 != 0 && Faces[i].nIndex1 != 0)
+        {
+            // Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
+            vIndex = Faces[i].vIndex1 > 0 ? Faces[i].vIndex1 - 1 : -(Faces[i].vIndex1 - 1);
+            tIndex = Faces[i].tIndex1 > 0 ? Faces[i].tIndex1 - 1 : -(Faces[i].tIndex1 - 1);
+            nIndex = Faces[i].nIndex1 > 0 ? Faces[i].nIndex1 - 1 : -(Faces[i].nIndex1 - 1);
+        }
+        else
+        {
+            vIndex = 1;
+            tIndex = 1;
+            nIndex = 1;
+        }
+   		//int vIndex = Faces[ i ].vIndex1 < 0 ? -( Faces[ i ].vIndex1 + 1): Faces[i].vIndex1 - 1;
+     //   int tIndex = Faces[i].tIndex1 < 0 ? -(Faces[i].tIndex1 + 1) : Faces[i].tIndex1 - 1;
+     //   int nIndex = Faces[i].nIndex1 < 0 ? -(Faces[i].nIndex1 + 1) : Faces[i].nIndex1 - 1;
+
+
 
 		int k = j;
 		if( m_TextboxProgress )
