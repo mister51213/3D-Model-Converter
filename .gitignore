@@ -31,3 +31,5 @@
 *.db
 *.opendb
 /DX11_EscNY_3DObject_Parser/x64/Debug
+/DX11_EscNY_3DObject_Parser/3DObject_Parser/x64/Debug/3DObject_Parser.tlog
+/DX11_EscNY_3DObject_Parser/3DObject_Parser/x64/Debug

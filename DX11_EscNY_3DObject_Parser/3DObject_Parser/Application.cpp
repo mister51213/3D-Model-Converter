@@ -9,6 +9,9 @@ Application::Application()
 	// Initialize the COM objects
 	CoInitializeEx( nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
 
+	INITCOMMONCONTROLSEX initCtrl{ sizeof( initCtrl ), ICC_PROGRESS_CLASS };
+	InitCommonControlsEx( &initCtrl );
+
 	int winStyle = WS_OVERLAPPEDWINDOW;
 	int winExStyle = WS_OVERLAPPED;
 
