@@ -1,4 +1,0 @@
-﻿  OBJLoader.cpp
-c:\users\n\desktop\gamedev\dx11_escny_3dobject_parser\3d-model-converter\dx11_escny_3dobject_parser\3dobject_parser\objloader.cpp(153): warning C4244: 'initializing': conversion from 'fpos_t' to 'int', possible loss of data
-  3DObject_Parser.vcxproj -> C:\Users\n\Desktop\GameDev\DX11_EscNY_3DObject_Parser\3D-Model-Converter\DX11_EscNY_3DObject_Parser\x64\Debug\3DObject_Parser.exe
-  3DObject_Parser.vcxproj -> C:\Users\n\Desktop\GameDev\DX11_EscNY_3DObject_Parser\3D-Model-Converter\DX11_EscNY_3DObject_Parser\x64\Debug\3DObject_Parser.pdb (Full PDB)
