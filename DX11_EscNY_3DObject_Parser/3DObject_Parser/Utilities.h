@@ -5,24 +5,6 @@
 #include <wrl.h>
 #include <d3d11.h>
 
-// NOTE: There are a few things I'd like to discuss about this file.
-/*
-* First, it's getting bigger and harder to find what you're looking for.
-* Second, goes along with first, since everything is 'inline' any changes
-	made here require everything that includes the file to recompile, even
-	if there are no changes in those classes, which makes it take longer to 
-	recompile.
-* Third, we probably need to make move some of the code to be more specific.
-	The math stuff like the XMFLOAT3 overloads, the angle conversions, math 
-	functions and Clamp, should probably be in a Math.h and Math.cpp file.
-
-To resolve this, we should consider the Utilities.h file for non-function 
-type utilities, like the structs and enums, helpful macros and non-math related
-helper function signatures.  Create a Utilities.cpp file for helper function
-implementations.  To make things easier, we can just include the Math.h file
-in here, so the rest of the files that include Utilities.h don't have to be 
-changed.
-*/
 using namespace DirectX;
 
 // Permit me to be a little lazy :)

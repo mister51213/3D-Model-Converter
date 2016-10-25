@@ -9,6 +9,9 @@ Application::Application()
 	// Initialize the COM objects
 	CoInitializeEx( nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE );
 
+	INITCOMMONCONTROLSEX initCtrl{ sizeof( initCtrl ), ICC_PROGRESS_CLASS };
+	InitCommonControlsEx( &initCtrl );
+
 	int winStyle = WS_OVERLAPPEDWINDOW;
 	int winExStyle = WS_OVERLAPPED;
 
@@ -434,10 +437,22 @@ void Application::OnConvert()
 	BOOL isWindow = IsWindow( progress );
 
 	ShowWindow( progress, SW_SHOW );
+	UpdateWindow( m_HandleParent );
+
+	// Progress bar range will be 0 to 100
+	SendMessageW(
+		progress,
+		PBM_SETRANGE,
+		static_cast<WPARAM>( 0 ),
+		MAKELPARAM( 0, 100 )
+	);
 
 	// Progress bar will increment by 1 by default
-	SendMessage(
-		progress, PBM_SETSTEP, 1, 0
+	auto lresult = SendMessageW(
+		progress, 
+		PBM_SETSTEP, 
+		static_cast<WPARAM>(1), 
+		static_cast<LPARAM>(0)
 	);
 
 	OBJLoader loader;

@@ -1,5 +1,9 @@
 #include "OBJLoader.h"
 #include <CommCtrl.h>
+#include <sstream>
+#include <iomanip>
+
+
 
 using namespace std;
 
@@ -22,210 +26,143 @@ bool OBJLoader::Load(
 	const std::wstring &FilenameSave )
 {
 	m_TextboxProgress = TextboxProgress;
-	bool result = ReadFileCounts( FilenameLoad );
-	if( !result )
-	{
-		return result;
-	}
 
-	// Initialize the vector of data structures.
-	vector<XMFLOAT3> vertices( m_vertexCount ), normals( m_normalCount );
-	vector<XMFLOAT2> texcoords( m_textureCount );
-	vector<FaceType> faces( m_faceCount );
+	// Counts vertex data and sets loader type (Triangle or Quadrangle loader)
+	bool result = Preprocess( FilenameLoad );
+	if ( !result ) return false;
 
 	// Read in the data from the OBJ file
-	ReadDataFromFile( FilenameLoad, vertices, texcoords, normals, faces );
-
-	// Write to custom text file layout
-	//WriteToTextFile( FilenameSave, vertices, texcoords, normals, faces );
+	result = m_loader->LoadData();
+	if ( !result ) return false;
 
 	// Write to custom binary file layout
-	WriteToBinaryFile( FilenameSave, vertices, texcoords, normals, faces );
+	/*if ( m_hasTexCoord )
+	{
+		if ( m_hasNormals )
+		{
+			WriteVertTexCoordNormalToBinaryFile( 
+				FilenameSave, vertices, texcoords, normals, faces );
+		}
+		else
+		{
+			WriteVertTexCoordToBinaryFile( FilenameSave, vertices, texcoords, faces );
+		}
+	}
+	else if ( m_hasNormals )
+	{
+		WriteVertNormalToBinaryFile( FilenameSave, vertices, normals, faces );
+	}
+	else
+	{
+		WriteVertToBinaryFile( FilenameSave, vertices, faces );
+	}*/
 
 	return result;
 }
 
-bool OBJLoader::ReadFileCounts( const std::wstring &Filename )
+// Just messing around with constexpr, but this struct is used to help
+// test first two bytes of a string instead of testing each char separately.
+struct CStr
 {
-	// Open the file.
-	ifstream file( Filename, std::ios::ate );
-	auto filesize = file.tellg().seekpos();
-	file.seekg( std::ios::beg );
+	static constexpr char vType[] = { 'v', ' ', 'v', 't', 'v', 'n', 'f', ' ' };
 
-	if( m_TextboxProgress )
+	template<int Idx>
+	struct GetPair
 	{
-		SendMessage(
-			m_TextboxProgress, PBM_SETRANGE32, 0, MAKELPARAM(0, filesize )
-		);
-		SetWindowText( m_TextboxProgress, L"Counting vertices..." );
-	}
-
-
-	// Check if it was successful in opening the file.
-	bool result = file.good();
-	if( result )
+		static constexpr short result = vType[ Idx ] | ( vType[ Idx + 1 ] << 8 );
+	};
+	struct GetVertexStr
 	{
-		char input = 0;
-		int count = 0;
-		// Read from the file and continue to read until the end of the file is reached.
-		while( count < filesize )
-		{
-			if( m_TextboxProgress )
-			{
-				UpdateProgress( count );
-			}
+		static constexpr short result = GetPair<0>::result;
+	};
+	struct GetVertexTexCoordStr
+	{
+		static constexpr short result = GetPair<2>::result;
+	};
+	struct GetVertexNormalStr
+	{
+		static constexpr short result = GetPair<4>::result;
+	};
+	struct GetFaceStr
+	{
+		static constexpr short result = GetPair<6>::result;
+	};
+};
 
-			file.get( input );
-			++count;
-			switch( input )
-			{
-				// If the line starts with 'v' then check next character.
-				case 'v':
-					file.get( input );
-					++count;
-					switch( input )
-					{
-						// If ' ' then count vertex
-						case ' ':
-							++m_vertexCount;
-							break;
-							// If 't' then count texture coordinates
-						case 't':
-							++m_textureCount;
-							break;
-							// If 'n' then count normal
-						case 'n':
-							++m_normalCount;
-							break;
-					}
-					break;
-					// If the line starts with 'f' then increment the face count.
-				case 'f':
-					file.get( input );
-					++count;
-					if( input == ' ' )
-					{
-						++m_faceCount;
-					}
-					break;
-			}			
-		}
-
-		// Close the file.
-		file.close();
-
-		if( m_faceCount <= 0 )
-		{
-			result = false;
-		}
-	}
-
-	return result;
-}
-
-bool OBJLoader::ReadDataFromFile(
-	const std::wstring &Filename, 
-	std::vector<XMFLOAT3>& Vertices, 
-	std::vector<XMFLOAT2>& TexCoords, 
-	std::vector<XMFLOAT3>& Normals, 
-	std::vector<FaceType>& Faces )
+bool OBJLoader::Preprocess( const std::wstring & Filename )
 {
-	// used to INPUT the file
-	char input, input2;
+	constexpr auto maxLineSize = 255u;
 
-	// Initialize the indexes.
-	int vertexIndex = 0;
-	int texcoordIndex = 0;
-	int normalIndex = 0;
-	int faceIndex = 0;
+	auto file = std::ifstream( Filename );
+	if ( !file.is_open() ) return false;
 
-	// Open the file.
-	ifstream file( Filename, std::ios::ate );
+	auto buffer = make_unique<char[]>( maxLineSize );
+	bool polyCountDetermined = false;
 
-	// Check if it was successful in opening the file.
-	if( file.fail() == true )
+	// This loop only checks the first two bytes of each line, thus skipping
+	// the rest of the line avoiding having to read every byte of the file.
+	while ( !file.eof() )
 	{
-		return false;
-	}
+		file.getline( buffer.get(), maxLineSize );
+		const auto iBuffer = reinterpret_cast< short* >( buffer.get() );
 
-	// Read in the vertices, texture coordinates, and normals into the data structures.
-	// Important: Also convert to left hand coordinate system since Maya uses right hand coordinate system.
-	int filesize = file.tellg().seekpos();
-	file.seekg( std::ios::beg );
-
-	if( m_TextboxProgress )
-	{
-		SendMessage(
-			m_TextboxProgress, PBM_SETRANGE32, 0, MAKELPARAM( 0, filesize )
-		);
-		SetWindowText( m_TextboxProgress, L"Reading file..." );
-	}
-
-	int count = 0;
-	while( count < filesize )
-	{
-		if( m_TextboxProgress )
+		switch ( *iBuffer )
 		{
-			UpdateProgress( count );
-		}
-		file.get( input );
-		++count;
-		if( input == 'v' )
-		{
-			file.get( input );
-			++count;
-
-			// Read in the vertices.
-			if( input == ' ' )
+			case CStr::GetVertexStr::result:
+				++m_vertexCount;
+				break;
+			case CStr::GetVertexTexCoordStr::result:
+				++m_textureCount;
+				break;
+			case CStr::GetVertexNormalStr::result:
+				++m_normalCount;
+				break;
+			case CStr::GetFaceStr::result:
 			{
-				file >> Vertices[ vertexIndex ].x >> Vertices[ vertexIndex ].y >> Vertices[ vertexIndex ].z;
+				// If already determined whether triangle, quadrangle or other
+				// skip this part and just count the faces.  May need to revisit
+				// this if files have mixed tris, quads and higher n-gons.
+				if ( !polyCountDetermined )
+				{
+					const auto len = strlen( buffer.get() );
+					unsigned wsCount = 0;
+					for ( int i = 0; i < len; ++i )
+					{
+						if ( buffer[ i ] == ' ' )
+						{
+							++wsCount;
+						}
+					}
+					if ( wsCount == 3 )
+					{
+						m_isTriangle = true;
+						polyCountDetermined = true;
+					}
+					else if ( wsCount == 4 )
+					{
+						m_isQuadrangle = true;
+						polyCountDetermined = true;
+					}
+				}
 
-				// Invert the Z vertex to change to left hand system.
-				Vertices[ vertexIndex ].z = Vertices[ vertexIndex ].z * -1.0f;
-				vertexIndex++;
-			}
-
-			// TODO: for loading the binary, we should manually skip the z value of teach texcoord
-			// Read in the texture uv coordinates.
-			if( input == 't' )
-			{
-				file >> TexCoords[ texcoordIndex ].x >> TexCoords[ texcoordIndex ].y;
-
-				// Invert the V texture coordinates to left hand system.
-				TexCoords[ texcoordIndex ].y = 1.0f - TexCoords[ texcoordIndex ].y;
-				texcoordIndex++;
-			}
-
-			// Read in the normals.
-			if( input == 'n' )
-			{
-				file >> Normals[ normalIndex ].x >> Normals[ normalIndex ].y >> Normals[ normalIndex ].z;
-
-				// Invert the Z normal to change to left hand system.
-				Normals[ normalIndex ].z = Normals[ normalIndex ].z * -1.0f;
-				normalIndex++;
-			}
-		}
-
-		// Read in the faces.
-		if( input == 'f' )
-		{
-			file.get( input );
-			++count;
-			if( input == ' ' )
-			{
-				// Read the face data in backwards to convert it to a left hand system from right hand system.
-				file >> Faces[ faceIndex ].vIndex3 >> input2 >> Faces[ faceIndex ].tIndex3 >> input2 >> Faces[ faceIndex ].nIndex3
-					>> Faces[ faceIndex ].vIndex2 >> input2 >> Faces[ faceIndex ].tIndex2 >> input2 >> Faces[ faceIndex ].nIndex2
-					>> Faces[ faceIndex ].vIndex1 >> input2 >> Faces[ faceIndex ].tIndex1 >> input2 >> Faces[ faceIndex ].nIndex1;
-
-				faceIndex++;
+				++m_faceCount;
+				break;
 			}
 		}
 	}
 
-	// Close the file.
 	file.close();
+
+	if ( m_isTriangle )
+	{
+		m_loader.reset( new ObjTriangleLoader( *this, Filename ) );
+	}
+	else if ( m_isQuadrangle )
+	{
+		m_loader.reset( new ObjQuadLoader( *this, Filename ) );
+	}
+	m_hasTexCoord = ( m_textureCount > 0 ) ? true : false;
+	m_hasNormals = ( m_normalCount > 0 ) ? true : false;
 
 	return true;
 }
@@ -285,20 +222,102 @@ bool OBJLoader::WriteToTextFile(
 	return result;
 }
 
-bool OBJLoader::WriteToBinaryFile( 
+bool OBJLoader::WriteVertToBinaryFile( const std::wstring & Filename, const std::vector<XMFLOAT3>& Vertices, const std::vector<FaceType>& Faces )
+{
+	return false;
+}
+
+bool OBJLoader::WriteVertTexCoordToBinaryFile( const std::wstring & Filename, const std::vector<XMFLOAT3>& Vertices, const std::vector<XMFLOAT2>& TexCoords, const std::vector<FaceType>& Faces )
+{
+	return false;
+}
+
+bool OBJLoader::WriteVertNormalToBinaryFile(
+	const std::wstring & Filename, 
+	const std::vector<XMFLOAT3>& Vertices, 
+	const std::vector<XMFLOAT3>& Normals, 
+	const std::vector<FaceType>& Faces )
+{
+	int vertCount = m_faceCount * 3;
+	if ( m_TextboxProgress )
+	{
+		SendMessage(
+			m_TextboxProgress, PBM_SETRANGE32, 0, MAKELPARAM( 0, vertCount )
+		);
+		SetWindowText( m_TextboxProgress, L"Writing file..." );
+	}
+
+	vector<XMFLOAT3> v( vertCount ), vn( vertCount );
+	// i is for index of faces, j is for index of vertexFormats list
+	for ( int i = 0, j = 0; i < m_faceCount; i++, j += 3 )
+	{
+		// Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
+		auto vIndex = Faces[ i ].vIndex1 > 0 ? Faces[ i ].vIndex1 - 1 : -( Faces[ i ].vIndex1 + 1 );
+		auto nIndex = Faces[ i ].nIndex1 > 0 ? Faces[ i ].nIndex1 - 1 : -( Faces[ i ].nIndex1 + 1 );
+
+		int k = j;
+		if ( m_TextboxProgress )
+		{
+			UpdateProgress( k );
+		}
+
+		v[ k ] = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
+		vn[ k ] = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
+
+		// Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
+		vIndex = Faces[ i ].vIndex2 > 0 ? Faces[ i ].vIndex2 - 1 : -( Faces[ i ].vIndex2 + 1 );
+		nIndex = Faces[ i ].nIndex2 > 0 ? Faces[ i ].nIndex2 - 1 : -( Faces[ i ].nIndex2 + 1 );
+
+		++k;
+		v[ k ] = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
+		vn[ k ] = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
+
+		// Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
+		vIndex = Faces[ i ].vIndex3 > 0 ? Faces[ i ].vIndex3 - 1 : -( Faces[ i ].vIndex3 + 1 );
+		nIndex = Faces[ i ].nIndex3 > 0 ? Faces[ i ].nIndex3 - 1 : -( Faces[ i ].nIndex3 + 1 );
+
+		++k;
+		v[ k ] = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
+		vn[ k ] = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
+	}
+
+	const auto pvBuffer = reinterpret_cast<char*>( v.data() );
+	const auto pvnBuffer = reinterpret_cast<char*>( vn.data() );
+	const auto float3BufferSize = sizeof( XMFLOAT3 ) * vertCount;
+
+	const auto pDataBuffer = reinterpret_cast<char*>( &vertCount );
+	std::streamsize bufferSize = static_cast<streamsize>( sizeof( int ) );
+	// Open the output file.
+	ofstream file( Filename, std::ios::binary );
+	if ( file.fail() )
+	{
+		return false;
+	}
+
+	const char texCount = 0;
+	// Write vertex count into first 32 bits
+	file.write( pDataBuffer, bufferSize );
+	file.write( &texCount, bufferSize );
+	file.write( pDataBuffer, bufferSize );
+
+
+	file.write( pvBuffer, float3BufferSize );
+	file.write( pvnBuffer, float3BufferSize );
+
+	// Close the output file.
+	file.close();
+
+
+	return true;
+}
+
+bool OBJLoader::WriteVertTexCoordNormalToBinaryFile(
 	const std::wstring &Filename,
 	const std::vector<XMFLOAT3>& Vertices,
 	const std::vector<XMFLOAT2>& TexCoords,
 	const std::vector<XMFLOAT3>& Normals,
 	const std::vector<FaceType>& Faces )
 {
-	// Open the output file.
-	ofstream file( Filename, std::ios::binary );
-	if( file.fail() )
-	{
-		return false;
-	}
-
 	// Write vertex count into first 32 bits
 	int vertCount = m_faceCount * 3;
 	if( m_TextboxProgress )
@@ -309,37 +328,15 @@ bool OBJLoader::WriteToBinaryFile(
 		SetWindowText( m_TextboxProgress, L"Writing file..." );
 	}
 
-	char *pDataBuffer = reinterpret_cast<char*>( &vertCount );
-	std::streamsize bufferSize = static_cast<streamsize>( sizeof( int ) );
-
-	file.write( pDataBuffer, bufferSize );
-
-	vector<VertexPositionUVNormalType> vertexFormats( vertCount );
+	vector<XMFLOAT3> v( vertCount ), vn( vertCount );
+	vector<XMFLOAT2> vt( vertCount );
 	// i is for index of faces, j is for index of vertexFormats list
 	for( int i = 0, j = 0; i < m_faceCount; i++, j += 3 )
 	{
-        int vIndex = 0;
-        int tIndex = 0;
-        int nIndex = 0;
-
-        if (Faces[i].vIndex1 != 0 && Faces[i].tIndex1 != 0 && Faces[i].nIndex1 != 0)
-        {
-            // Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
-            vIndex = Faces[i].vIndex1 > 0 ? Faces[i].vIndex1 - 1 : -(Faces[i].vIndex1 - 1);
-            tIndex = Faces[i].tIndex1 > 0 ? Faces[i].tIndex1 - 1 : -(Faces[i].tIndex1 - 1);
-            nIndex = Faces[i].nIndex1 > 0 ? Faces[i].nIndex1 - 1 : -(Faces[i].nIndex1 - 1);
-        }
-        else
-        {
-            vIndex = 1;
-            tIndex = 1;
-            nIndex = 1;
-        }
-   		//int vIndex = Faces[ i ].vIndex1 < 0 ? -( Faces[ i ].vIndex1 + 1): Faces[i].vIndex1 - 1;
-     //   int tIndex = Faces[i].tIndex1 < 0 ? -(Faces[i].tIndex1 + 1) : Faces[i].tIndex1 - 1;
-     //   int nIndex = Faces[i].nIndex1 < 0 ? -(Faces[i].nIndex1 + 1) : Faces[i].nIndex1 - 1;
-
-
+		// Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
+		auto vIndex = Faces[ i ].vIndex1 > 0 ? Faces[ i ].vIndex1 - 1 : -( Faces[ i ].vIndex1 + 1 );
+		auto tIndex = Faces[ i ].tIndex1 > 0 ? Faces[ i ].tIndex1 - 1 : -( Faces[ i ].tIndex1 + 1 );
+		auto nIndex = Faces[ i ].nIndex1 > 0 ? Faces[ i ].nIndex1 - 1 : -( Faces[ i ].nIndex1 + 1 );
 
 		int k = j;
 		if( m_TextboxProgress )
@@ -347,10 +344,9 @@ bool OBJLoader::WriteToBinaryFile(
 			UpdateProgress( k );
 		}
 
-		assert( k < vertexFormats.size() );
-		vertexFormats[ k ].position = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
-		vertexFormats[ k  ].uv = { TexCoords[ tIndex ].x, TexCoords[ tIndex ].y };
-		vertexFormats[ k  ].normal = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
+		v[ k ] = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
+		vt[ k ] = { TexCoords[ tIndex ].x, TexCoords[ tIndex ].y };
+		vn[ k ] = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
 
 		// Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
 		vIndex = Faces[ i ].vIndex2 > 0 ? Faces[ i ].vIndex2 - 1 : -( Faces[ i ].vIndex2 + 1 );
@@ -358,10 +354,9 @@ bool OBJLoader::WriteToBinaryFile(
 		nIndex = Faces[ i ].nIndex2 > 0 ? Faces[ i ].nIndex2 - 1 : -( Faces[ i ].nIndex2 + 1 );
 
 		++k;
-		assert( k < vertexFormats.size() );
-		vertexFormats[ k ].position = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
-		vertexFormats[ k ].uv = { TexCoords[ tIndex ].x, TexCoords[ tIndex ].y };
-		vertexFormats[ k ].normal = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
+		v[ k ] = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
+		vt[ k ] = { TexCoords[ tIndex ].x, TexCoords[ tIndex ].y };
+		vn[ k ] = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
 
 		// Sometimes faces indices will be negative, so multiplying by -1 to make them positive, if negative.
 		vIndex = Faces[ i ].vIndex3 > 0 ? Faces[ i ].vIndex3 - 1 : -( Faces[ i ].vIndex3 + 1 );
@@ -369,16 +364,34 @@ bool OBJLoader::WriteToBinaryFile(
 		nIndex = Faces[ i ].nIndex3 > 0 ? Faces[ i ].nIndex3 - 1 : -( Faces[ i ].nIndex3 + 1 );
 
 		++k;
-		assert( k < vertexFormats.size() );
-		vertexFormats[ k ].position = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
-		vertexFormats[ k ].uv = { TexCoords[ tIndex ].x, TexCoords[ tIndex ].y };
-		vertexFormats[ k ].normal = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
-
+		v[ k ] = { Vertices[ vIndex ].x, Vertices[ vIndex ].y, Vertices[ vIndex ].z };
+		vt[ k ] = { TexCoords[ tIndex ].x, TexCoords[ tIndex ].y };
+		vn[ k ] = { Normals[ nIndex ].x, Normals[ nIndex ].y, Normals[ nIndex ].z };
 	}
 
-	pDataBuffer = reinterpret_cast<char*>( vertexFormats.data() );
-	bufferSize = sizeof( VertexPositionUVNormalType )*vertCount;
+	const auto pvBuffer = reinterpret_cast<char*>( v.data() );
+	const auto pvtBuffer = reinterpret_cast<char*>( vt.data() );
+	const auto pvnBuffer = reinterpret_cast<char*>( vn.data() );
+	const auto float3BufferSize = sizeof( XMFLOAT3 ) * vertCount;
+	const auto float2BufferSize = sizeof( XMFLOAT2 ) * vertCount;
+
+	const auto pDataBuffer = reinterpret_cast<char*>( &vertCount );
+	std::streamsize bufferSize = static_cast<streamsize>( sizeof( int ) );
+	// Open the output file.
+	ofstream file( Filename, std::ios::binary );
+	if ( file.fail() )
+	{
+		return false;
+	}
+
 	file.write( pDataBuffer, bufferSize );
+	file.write( pDataBuffer, bufferSize );
+	file.write( pDataBuffer, bufferSize );
+
+
+	file.write( pvBuffer, float3BufferSize );
+	file.write( pvtBuffer, float2BufferSize );
+	file.write( pvnBuffer, float3BufferSize );
 
 	// Close the output file.
 	file.close();
@@ -396,4 +409,259 @@ void OBJLoader::UpdateProgress( int CurrentVertex )
 			m_TextboxProgress, PBM_STEPIT, CurrentVertex, 0
 		);
 	}
+}
+
+bool OBJLoader::ObjTriangleLoader::LoadData()
+{
+	vector<XMFLOAT3> vertices( m_parent.m_vertexCount ), normals( m_parent.m_normalCount );
+	vector<XMFLOAT2> texcoords( m_parent.m_textureCount );
+	vector<FaceType> faces( m_parent.m_faceCount );
+	auto file = std::ifstream( m_filename );
+
+	const auto maxLineSize = 255u;	
+	auto GetLine = [ &file, &maxLineSize ]()
+	{
+		std::unique_ptr<char[]> buffer( new char[ maxLineSize ] );
+		file.getline( buffer.get(), maxLineSize );
+		return buffer;
+	};
+
+	auto v_index = 0u;
+	auto t_index = 0u;
+	auto n_index = 0u;
+	auto f_index = 0u;
+
+	auto FillVertexPosition = [ &v_index, &file, &vertices, this ]( const int BuffLength )
+	{
+		file.seekg( -( BuffLength - 2l ), file.cur );
+		
+		vertices[ v_index ] = [ &file ]()
+		{
+			float x, y, z;
+			file >> x >> y >> z;
+			return XMFLOAT3( x, y, z );
+		}( );
+				
+		const auto val = file.get();
+		++v_index;
+	};
+	auto FillTexCoordinates = [ &t_index, &file, &texcoords, this ]( const int BuffLength )
+	{
+		file.seekg( -( BuffLength - 3l ), file.cur );
+		file
+			>> texcoords[ t_index ].x
+			>> texcoords[ t_index ].y;
+		const auto val = file.get();
+		++t_index;
+	};
+	auto FillVertexNormals = [ &n_index, &file, &normals, this ]( const int BufferLength )
+	{
+		file.seekg( -( BufferLength - 3l ), file.cur );
+		file
+			>> normals[ n_index ].x
+			>> normals[ n_index ].y
+			>> normals[ n_index ].z;
+		const auto val = file.get();
+		++n_index;
+	};
+
+	// Lambda for filling [V]ertex, [T]extureCoord and [N]ormals data
+	auto FillFaceVTN = [ &f_index, &file, &faces ]()
+	{
+		char c = 0;
+		
+		file
+			>> faces[ f_index ].vIndex3 >> c >> faces[ f_index ].tIndex3 >> c >> faces[ f_index ].nIndex3
+			>> faces[ f_index ].vIndex2 >> c >> faces[ f_index ].tIndex2 >> c >> faces[ f_index ].nIndex2
+			>> faces[ f_index ].vIndex1 >> c >> faces[ f_index ].tIndex1 >> c >> faces[ f_index ].nIndex1;
+	};
+	// Lambda for filling [V]ertex and [T]extureCoord data
+	auto FillFaceVT  = [ &f_index, &file, &faces ]()
+	{
+		char c = 0;
+		file
+			>> faces[ f_index ].vIndex3 >> c >> faces[ f_index ].tIndex3
+			>> faces[ f_index ].vIndex2 >> c >> faces[ f_index ].tIndex2
+			>> faces[ f_index ].vIndex1 >> c >> faces[ f_index ].tIndex1;
+	};
+	// Lambda for filling [V]ertex and [N]ormals data
+	auto FillFaceVN  = [ &f_index, &file, &faces ]()
+	{
+		char c = 0;
+		file
+			>> faces[ f_index ].vIndex3 >> c >> c >> faces[ f_index ].nIndex3
+			>> faces[ f_index ].vIndex2 >> c >> c >> faces[ f_index ].nIndex2
+			>> faces[ f_index ].vIndex1 >> c >> c >> faces[ f_index ].nIndex1;
+	};
+	// Lambda for filling [V]ertex  data
+	auto FillFaceV   = [ &f_index, &file, &faces ]()
+	{
+		char c = 0;
+		file
+			>> faces[ f_index ].vIndex3 >> c >> c
+			>> faces[ f_index ].vIndex2 >> c >> c
+			>> faces[ f_index ].vIndex1 >> c >> c;
+	};
+	// Lambda for sorting out which face data to collect
+	auto FillFaces   = [ & ]( const int BufferLength )
+	{
+		// For some reason, the indices don't need to be offset like the
+		// other float data for vertex, texture and normals
+		file.seekg( -( BufferLength ), file.cur );
+		if ( m_parent.m_hasTexCoord && m_parent.m_hasNormals )
+		{
+			FillFaceVTN();
+		}
+		else if ( m_parent.m_hasTexCoord && !m_parent.m_hasNormals )
+		{
+			FillFaceVT();
+		}
+		else if ( !m_parent.m_hasTexCoord && m_parent.m_hasNormals )
+		{
+			FillFaceVN();
+		}
+		else
+		{
+			FillFaceV();
+		}
+		const auto val = file.get();
+		++f_index;
+	};
+
+	// This loop only checks the first two bytes of each line, thus skipping
+	// the rest of the line avoiding having to read every byte of the file.
+	while ( !file.eof() )
+	{
+		// Gets a line of data and stores in a unique_ptr<char[]>
+		const auto buffer = GetLine();
+		
+		// Converts the char array to an short array and checks the first
+		// two bytes for 'v ', 'vt', 'vn' and 'f '.
+		const auto iBuffer = reinterpret_cast<const short* >( buffer.get() );
+		const auto bufLen = static_cast<int>( strlen( buffer.get() ) );
+
+		// Bytes are stored in little endian, so compare against
+		// ' v', 'tv', 'nv' and ' f'
+		switch ( *iBuffer )
+		{
+			case CStr::GetVertexStr::result:
+				FillVertexPosition( bufLen );
+				break;
+			case CStr::GetVertexTexCoordStr::result:
+				FillTexCoordinates( bufLen );
+				break;
+			case CStr::GetVertexNormalStr::result:
+				FillVertexNormals( bufLen );
+				break;
+			case CStr::GetFaceStr::result:
+				FillFaces( bufLen );
+				break;
+		}
+	}
+
+	// Moves local std::vectors to parent owned std::vectors
+	m_parent.m_v = std::move( vertices );
+	m_parent.m_vt = std::move( texcoords );
+	m_parent.m_vn = std::move( normals );
+	m_parent.m_f = std::move( faces );
+
+	return true;
+}
+
+bool OBJLoader::ObjQuadLoader::LoadData()
+{
+	vector<XMFLOAT3> vertices( m_parent.m_vertexCount ), normals( m_parent.m_normalCount );
+	vector<XMFLOAT2> texcoords( m_parent.m_textureCount );
+	vector<FaceTypeQuad> faces( m_parent.m_faceCount );
+
+	const auto maxLineSize = 255u;
+
+	auto v_index = 0u;
+	auto t_index = 0u;
+	auto n_index = 0u;
+	auto f_index = 0u;
+	auto file = std::ifstream( m_filename );
+	while ( !file.eof() )
+	{
+		const auto buffer = [ &file, &maxLineSize ]()
+		{
+			std::unique_ptr<char[]> buffer( new char[ maxLineSize ] );
+			file.getline( buffer.get(), maxLineSize );
+			return buffer;
+		}( );
+
+		const auto iBuffer = reinterpret_cast<const short* >( buffer.get() );
+		const auto bufLen = static_cast<int>( strlen( buffer.get() ) );
+
+		switch ( *iBuffer )
+		{
+			case CStr::GetVertexStr::result:
+				file.seekg( -( bufLen - 2l ), file.cur );
+				file
+					>> vertices[ v_index ].x
+					>> vertices[ v_index ].y
+					>> vertices[ v_index ].z;
+				++v_index;
+				break;
+			case CStr::GetVertexTexCoordStr::result:
+				file.seekg( -( bufLen - 3l ), file.cur );
+				file
+					>> texcoords[ t_index ].x
+					>> texcoords[ t_index ].y;
+				++t_index;
+				break;
+			case CStr::GetVertexNormalStr::result:
+				file.seekg( -( bufLen - 3l ), file.cur );
+				file
+					>> normals[ n_index ].x
+					>> normals[ n_index ].y
+					>> normals[ n_index ].z;
+				++n_index;
+				break;
+			case CStr::GetFaceStr::result:
+			{
+				file.seekg( -( bufLen - 2l ), file.cur );
+				if ( m_parent.m_hasTexCoord && m_parent.m_hasNormals )
+				{
+					char c = 0;
+					file
+						>> faces[ f_index ].vIndex4 >> c >> faces[ f_index ].tIndex4 >> c >> faces[ f_index ].nIndex4
+						>> faces[ f_index ].vIndex3 >> c >> faces[ f_index ].tIndex3 >> c >> faces[ f_index ].nIndex3
+						>> faces[ f_index ].vIndex2 >> c >> faces[ f_index ].tIndex2 >> c >> faces[ f_index ].nIndex2
+						>> faces[ f_index ].vIndex1 >> c >> faces[ f_index ].tIndex1 >> c >> faces[ f_index ].nIndex1;
+
+				}
+				else if ( m_parent.m_hasTexCoord && !m_parent.m_hasNormals )
+				{
+					char c = 0;
+					file
+						>> faces[ f_index ].vIndex4 >> c >> faces[ f_index ].tIndex4
+						>> faces[ f_index ].vIndex3 >> c >> faces[ f_index ].tIndex3
+						>> faces[ f_index ].vIndex2 >> c >> faces[ f_index ].tIndex2
+						>> faces[ f_index ].vIndex1 >> c >> faces[ f_index ].tIndex1;
+				}
+				else if ( !m_parent.m_hasTexCoord && m_parent.m_hasNormals )
+				{
+					char c = 0;
+					file
+						>> faces[ f_index ].vIndex4 >> c >> c >> faces[ f_index ].nIndex4
+						>> faces[ f_index ].vIndex3 >> c >> c >> faces[ f_index ].nIndex3
+						>> faces[ f_index ].vIndex2 >> c >> c >> faces[ f_index ].nIndex2
+						>> faces[ f_index ].vIndex1 >> c >> c >> faces[ f_index ].nIndex1;
+				}
+				else
+				{
+					char c = 0;
+					file
+						>> faces[ f_index ].vIndex4 >> c >> c
+						>> faces[ f_index ].vIndex3 >> c >> c
+						>> faces[ f_index ].vIndex2 >> c >> c
+						>> faces[ f_index ].vIndex1 >> c >> c;
+				}
+				++f_index;
+				break;
+			}
+		}
+	}
+	return true;
 }
